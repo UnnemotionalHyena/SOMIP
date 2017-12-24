@@ -6,38 +6,24 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
+#include <pthread.h>
 
-
-struct Order 
+struct Order
 {
-    int items[4];
+    struct Food *items;
+    int items_size;
     int priority;
     int max_wait;
 } Order;
 
-struct Food 
+struct Food
 {
     int id;
     int preparation_time;
     int complexity;
-    // string cooking_apparatus;
+    char cooking_apparatus[10];
 } Food;
 
-typedef struct 
-{
-    int priority;
-    struct Order *data;
-} node_t;
-
-typedef struct 
-{
-    node_t *nodes;
-    int len;
-    int size;
-} heap_t;
-
 void initialize_foods(struct Food *menu);
-void push (heap_t *h, int priority,struct Order *data);
-struct Order *pop (heap_t *h);
 
 #endif

@@ -1,108 +1,191 @@
 #include "orders.h"
+#include "queue.h"
+#include "prioritize_queue.h"
 
-int get_max_wait(int items[4], struct Food *menu);
+#define NUMBER_ORDERS 10
+
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+struct Order orders[NUMBER_ORDERS];
+struct Queue *queue;
+heap_t *h;
+
+int nr_order = 1;
+int pending_orders[3];
+
+const struct Food menu[8];
+
+int get_max_wait(struct Order order);
 int get_the_time(int id, struct Food *menu);
 
-void *cook(void *threadid)
+void *cook(void *cook_id)
 {
-    int time = (int)threadid;
-    // printf("Time of waiting: %d\n", time);
-    sleep(time/5);
+    int id = (int)cook_id;
+
+    int i;
+    struct Order *order_temp;
+    struct QNode *food_id;
+
+    while (1)
+    {
+        pthread_mutex_lock(&mutex);
+
+        food_id = deQueue(queue);
+
+        pthread_mutex_unlock(&mutex);
+        if (food_id == NULL)
+        {
+            pthread_mutex_lock(&mutex);
+
+            order_temp = prioritize_pop(h);
+            if (order_temp != -1)
+            {
+                for (i = 0; i < (*order_temp).items_size; i++)
+                {
+                    enQueue(queue, (int)(*order_temp).items[i].id, nr_order);
+                }
+                nr_order += 1;
+            }
+
+            pthread_mutex_unlock(&mutex);
+        }
+        else
+        {
+            printf("\nCook %d id working %d seconds(minutes) on order %d", id, menu[food_id->key].preparation_time, food_id->order);
+            pending_orders[id] = (int)food_id->order;
+
+            sleep(((int)menu[food_id->key].preparation_time)/3);
+
+            pending_orders[id] = -1;
+        }
+    }
 
     pthread_exit(NULL);
 }
 
-int main() 
+void *waitress(void *waitress_id)
 {
-    struct Food menu[8];
-    struct Order order[10];
-    struct Order *temp;
+    int id = (int)waitress_id;
 
+    int i, y, random_time, random_items, random_id, random_priority;
+
+    for (i = 0; i < NUMBER_ORDERS; i++)
+    {
+        random_items    = rand() % 4 + 1;
+        orders[i].items = (struct Food*) malloc(random_items * sizeof(struct Food));
+        for (y = 0; y < random_items; y++)
+        {
+            random_id = rand() % 8 + 1;
+
+            orders[i].items[y].id               = menu[random_id].id;
+            orders[i].items[y].preparation_time = menu[random_id].preparation_time;
+            orders[i].items[y].complexity       = menu[random_id].complexity;
+            strcpy(orders[i].items[y].cooking_apparatus, menu[random_id].cooking_apparatus);
+        }
+
+        orders[i].items_size = random_items;
+        random_priority      = rand() % 5 + 1;
+        orders[i].priority   = random_priority;
+        orders[i].max_wait   = get_max_wait(orders[i]);
+
+        pthread_mutex_lock(&mutex);
+        prioritize_push(h, orders[i].priority, &orders[i]);
+        pthread_mutex_unlock(&mutex);
+        printf("\nCame one order");
+        sleep((rand() % (4 + 1 - 2)) + 2);
+    }
+
+    pthread_exit(NULL);
+}
+
+void *checker(void *checker_id)
+{
+    int id = (int)checker_id;
+    int food_id = 1;
+    int last_order = 0;
+    // printf("checker initialized");
+    while(1)
+    {
+        while(pending_orders[0] != 0 || pending_orders[1] != 0 || pending_orders[2] != 0)
+        {
+            if (pending_orders[0] == -1 && pending_orders[1] == -1 && pending_orders[2] == -1 && last_order)
+            {
+                // do nothing, wait for other orders
+            }
+            else if (pending_orders[0] == -1 && pending_orders[1] == -1 && pending_orders[2] == -1 && !last_order)
+            {
+                printf("\nOrder %d is ready\n", food_id);
+                last_order = 1;
+            }
+            else if (pending_orders[0] != food_id && pending_orders[1] != food_id && pending_orders[2] != food_id)
+            {
+                printf("\nOrder %d is ready\n", food_id);
+                food_id += 1;
+                last_order = 0;
+            }
+        }
+    }
+}
+
+int main()
+{
+    pthread_t cook_threads[3], waitress_thread, checker_thread;
+    int i, thread_error;
     srand((unsigned)time(NULL));
-    int i, y, t, time, random_time, random_items, random_id, random_priority;
-    pthread_t threads[3];
-
-    int thread_error, free_cooks, nr_thread, item;
-    heap_t *h = (heap_t *)calloc(1, sizeof (heap_t));
-
 
     initialize_foods(&menu);
 
+    h     = (heap_t *)calloc(1, sizeof (heap_t));
+    queue = createQueue();
 
-    for (i = 0; i < 10; i++)
+    pending_orders[0] = 0;
+    pending_orders[1] = 0;
+    pending_orders[2] = 0;
+
+    for (i = 0; i < 3; i++)
     {
-        random_items = rand() % 4 + 1;
-        for (y = 0; y < random_items; y++)
+        thread_error = pthread_create(&cook_threads[i], NULL, cook, (void *)i);
+        if (thread_error)
         {
-            random_id         = rand() % 8 + 1;
-            order[i].items[y] = random_id;
+            printf("ERROR; return code from pthread_create() is %d\n", thread_error);
+            exit(-1);
         }
-        random_priority   = rand() % 5 + 1;
-        order[i].priority = random_priority;
-        order[i].max_wait = get_max_wait(order[i].items, &menu);
-
-        push(h, order[i].priority, &order[i]);
     }
 
-    nr_thread = 0;
-    for (i = 0; i < 10; i++)
+    thread_error = pthread_create(&waitress_thread, NULL, waitress, (void *)0);
+    if (thread_error)
     {
-        temp = pop(h);
-        item = 0;
-
-        while (1)
-        {
-            if (!get_the_time((*temp).items[item], &menu) == 0)
-            {
-                time         = get_the_time((*temp).items[item], &menu);
-                thread_error = pthread_create(&threads[nr_thread], NULL, cook, (void *)time);
-                if (nr_thread == 2){
-                    pthread_join(threads[0], NULL);
-                    pthread_join(threads[1], NULL);
-                    pthread_join(threads[2], NULL);
-                }
-                item += 1;
-                nr_thread += 1;
-                if (thread_error)
-                {
-                    printf("ERROR; return code from pthread_create() is %d\n", thread_error);
-                    exit(-1);
-                }
-                if (nr_thread == 3)
-                {
-                    nr_thread = 0;
-                }
-            }
-            else if (get_the_time((*temp).items[item], &menu) == 0)
-            {
-                if (nr_thread == 3)
-                {
-                    nr_thread = 0;
-                }
-                break;
-            }
-        }
-        printf("Order %d finished\n\n",i);
+        printf("ERROR; return code from pthread_create() is %d\n", thread_error);
+        exit(-1);
     }
 
+    thread_error = pthread_create(&checker_thread, NULL, checker, (void *)0);
+    if (thread_error)
+    {
+        printf("ERROR; return code from pthread_create() is %d\n", thread_error);
+        exit(-1);
+    }
+
+    pthread_join(cook_threads[0], NULL);
+    pthread_join(cook_threads[1], NULL);
+    pthread_join(cook_threads[2], NULL);
+    pthread_join(waitress_thread, NULL);
+    pthread_join(checker_thread, NULL);
     return 0;
 }
 
-int get_max_wait(int items[4], struct Food *menu)
+int get_max_wait(struct Order order)
 {
-    int i, j;
+    int j;
     int time = 0;
 
-    for (i = 0; i < 4; i++)
+    for (j = 0; j < order.items_size; j++)
     {
-        for (j = 0; j < 8; j++)
+        if (time < order.items[j].preparation_time)
         {
-            if (items[i] == menu[j].id && time < menu[j].preparation_time)
-            {
-                time = menu[j].preparation_time;
-            }
+            time = order.items[j].preparation_time;
         }
     }
+
     return time * 1.3;
 }
 
